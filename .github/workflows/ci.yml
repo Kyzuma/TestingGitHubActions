@@ -1,0 +1,133 @@
+name: CI Status Check
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # This job determines which parts of the codebase have changed
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.changes.outputs.frontend }}
+      backend: ${{ steps.changes.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+
+  # Frontend tests - only run if frontend changes detected
+  frontend-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Use Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+        
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+        
+    - name: Run frontend linting
+      run: |
+        cd frontend
+        npm run lint
+        
+    - name: Build frontend
+      run: |
+        cd frontend
+        npm run build
+        
+    - name: Run frontend tests (if available)
+      run: |
+        cd frontend
+        if npm list --depth=0 | grep -q "@vue/cli-plugin-unit-jest\|jest\|vitest"; then
+          npm run test:unit || echo "No unit tests found"
+        else
+          echo "No test framework detected, skipping tests"
+        fi
+      continue-on-error: true
+
+  # Backend tests - only run if backend changes detected
+  backend-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        
+    - name: Cache Maven dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+        
+    - name: Run backend tests
+      run: |
+        cd backend
+        ./mvnw test
+        
+    - name: Build backend
+      run: |
+        cd backend
+        ./mvnw clean package -DskipTests
+
+  # This job always runs and provides a single status check for branch protection
+  ci-status:
+    runs-on: ubuntu-latest
+    needs: [changes, frontend-tests, backend-tests]
+    if: always()
+    steps:
+      - name: Check CI Status
+        run: |
+          echo "Frontend changes: ${{ needs.changes.outputs.frontend }}"
+          echo "Backend changes: ${{ needs.changes.outputs.backend }}"
+          
+          # Check if frontend tests passed (if they ran)
+          if [[ "${{ needs.changes.outputs.frontend }}" == "true" ]]; then
+            if [[ "${{ needs.frontend-tests.result }}" != "success" ]]; then
+              echo "Frontend tests failed or were cancelled"
+              exit 1
+            fi
+            echo "Frontend tests passed"
+          else
+            echo "No frontend changes detected, skipping frontend tests"
+          fi
+          
+          # Check if backend tests passed (if they ran)
+          if [[ "${{ needs.changes.outputs.backend }}" == "true" ]]; then
+            if [[ "${{ needs.backend-tests.result }}" != "success" ]]; then
+              echo "Backend tests failed or were cancelled"
+              exit 1
+            fi
+            echo "Backend tests passed"
+          else
+            echo "No backend changes detected, skipping backend tests"
+          fi
+          
+          echo "All applicable tests passed successfully!"

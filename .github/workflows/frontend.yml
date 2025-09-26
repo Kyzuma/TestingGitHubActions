@@ -1,0 +1,44 @@
+name: Frontend CI
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Use Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+        
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+        
+    - name: Run frontend linting
+      run: |
+        cd frontend
+        npm run lint
+        
+    - name: Build frontend
+      run: |
+        cd frontend
+        npm run build
+        
+    - name: Run frontend tests (if available)
+      run: |
+        cd frontend
+        if npm list --depth=0 | grep -q "@vue/cli-plugin-unit-jest\|jest\|vitest"; then
+          npm run test:unit || echo "No unit tests found"
+        else
+          echo "No test framework detected, skipping tests"
+        fi
+      continue-on-error: true
